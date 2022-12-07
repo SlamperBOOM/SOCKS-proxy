@@ -8,7 +8,6 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
-import java.util.Iterator;
 
 public class ProxyThread extends Thread{
     private boolean isRunning = true;
@@ -24,10 +23,6 @@ public class ProxyThread extends Thread{
         serverChannel.configureBlocking(false);
         serverChannel.register(selector, SelectionKey.OP_ACCEPT);
         clients = new Clients();
-
-        DNSResolver resolver = new DNSResolver();
-        resolver.getTargetChannel().register(selector, SelectionKey.OP_READ, SelectionKey.OP_WRITE);
-        clients.addClient(resolver);
     }
 
     @Override
@@ -46,7 +41,7 @@ public class ProxyThread extends Thread{
                     } else if (key.isReadable()) {
                         //определяем от кого пришло сообщение и делегируем обработку нужному клиенту
                         SocketChannel clientChannel = (SocketChannel) key.channel();
-                        Client client = clients.findClient(clientChannel);
+                        ProxyClient client = clients.findClient(clientChannel);
                         if(client.getType() == ClientType.CLIENT){
                             client.receive();
                         }else{

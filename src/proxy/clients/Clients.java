@@ -5,23 +5,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Clients {
-    private List<Client> clients;
-    private DNSResolver resolver;
+    private List<ProxyClient> clients;
 
     public Clients(){
         clients = new ArrayList<>();
     }
 
-    public void addResolver(DNSResolver resolver){
-        this.resolver = resolver;
-    }
-
-    public void addClient(Client client){
+    public void addClient(ProxyClient client){
         clients.add(client);
     }
 
-    public Client findClient(SocketChannel channel){
-        for(Client client : clients){
+    public ProxyClient findClient(SocketChannel channel){
+        for(ProxyClient client : clients){
             if(client.getClientChannel().equals(channel) || client.getTargetChannel().equals(channel)){
                 return client;
             }
