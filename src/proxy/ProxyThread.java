@@ -37,16 +37,18 @@ public class ProxyThread extends Thread{
                 while (it.hasNext()) {
                     SelectionKey key = it.next();
                     it.remove();
-                    if (key.isAcceptable()) {
-                        SocketChannel clientChannel = ((ServerSocketChannel)key.channel()).accept();
-                        clientChannel.configureBlocking(false);
-                        clientChannel.register(selector, SelectionKey.OP_READ);
-                    } else if (key.isReadable()) {
-                        read(key);
-                    }else if(key.isConnectable()){
-                        connectToHost(key);
-                    }else if(key.isWritable()){
-                        write(key);
+                    if(key.isValid()) {
+                        if (key.isAcceptable()) {
+                            SocketChannel clientChannel = ((ServerSocketChannel) key.channel()).accept();
+                            clientChannel.configureBlocking(false);
+                            clientChannel.register(selector, SelectionKey.OP_READ);
+                        } else if (key.isReadable()) {
+                            read(key);
+                        } else if (key.isConnectable()) {
+                            connectToHost(key);
+                        } else if (key.isWritable()) {
+                            write(key);
+                        }
                     }
                 }
             }catch (IOException e){
@@ -63,21 +65,20 @@ public class ProxyThread extends Thread{
             client.input = ByteBuffer.allocate(BUFSIZ);
         }
         try {
-            if (channel.read(client.input) < 1) {//smth went wrong
+            channel.read(client.input);
+            /*if (channel.read(client.input) < 1) {//smth went wrong
                 System.out.println("Smth went wrong");
-                close(key);
-            } else if(client.status == Status.DISCONNECTED){ //запрос подключение к прокси
-                System.out.println("Connection to proxy");
+                close(key);*/
+            if(client.status == Status.DISCONNECTED){ //запрос подключение к прокси
                 connectToProxy(key);
             } else if(client.status == Status.CONNECTED){//запрос на создание тоннеля
-                System.out.println("Requesting connection to host");
                 if(client.input.array()[0] == 0x05){
                     if(client.input.array()[1] == 0x01) {//connect command
                         if (client.input.array()[3] == 0x01) {//IPv4 address
                             String address;
                             try {
                                 address = InetAddress.getByAddress(
-                                        Arrays.copyOfRange(client.input.array(), 5, 5 + 4)
+                                        Arrays.copyOfRange(client.input.array(), 4, 4 + 4)
                                 ).getHostAddress();
                             } catch (UnknownHostException e) {//cannot reach remote host
                                 e.printStackTrace();
@@ -94,10 +95,10 @@ public class ProxyThread extends Thread{
                             }
 
                             short port = ByteBuffer.wrap(
-                                    Arrays.copyOfRange(client.input.array(), 5 + 4, 5 + 4 + 2)
+                                    Arrays.copyOfRange(client.input.array(), 4 + 4, 4 + 4 + 2)
                             ).getShort();
 
-                            SocketAddress socketAddress = InetSocketAddress.createUnresolved(address, port);
+                            SocketAddress socketAddress = new InetSocketAddress(address, port);
                             SocketChannel targetChannel;
                             try {
                                 targetChannel = SocketChannel.open();
@@ -147,7 +148,7 @@ public class ProxyThread extends Thread{
                                     Arrays.copyOfRange(client.input.array(), 5 + nameLength, 5 + nameLength + 2)
                             ).getShort();
 
-                            SocketAddress socketAddress = InetSocketAddress.createUnresolved(address, port);
+                            SocketAddress socketAddress = new InetSocketAddress(address, port);
                             SocketChannel targetChannel;
                             try {
                                 targetChannel = SocketChannel.open();
@@ -215,7 +216,7 @@ public class ProxyThread extends Thread{
                 client.input.flip();
             }
         }catch (IOException e){
-            e.printStackTrace();
+            close(key);
         }
     }
 
@@ -231,6 +232,7 @@ public class ProxyThread extends Thread{
                                 .flip());
                         isNoAuthNormal = true;
                         ((ProxyClient)key.attachment()).status = Status.CONNECTED;
+                        ((ProxyClient)key.attachment()).input.clear();
                         System.out.println("Client connected to proxy");
                         break;
                     }
@@ -242,7 +244,6 @@ public class ProxyThread extends Thread{
                     System.out.println("NoAuth method doesn't requested");
                     close(key);
                 }
-
             }else{//если не совпадает версия SOCKS
                 ((SocketChannel)key.channel()).write(ByteBuffer.allocate(2)
                         .put((byte) 0x05)
@@ -265,32 +266,36 @@ public class ProxyThread extends Thread{
             e.printStackTrace();
         }
         client.input = ByteBuffer.allocate(BUFSIZ);
-        client.input.put(createAnswer(channel.socket().getPort()));
+        client.input.put(createAnswer(channel.socket().getPort())).flip();
         client.output = ((ProxyClient)client.target.attachment()).input;
         ((ProxyClient)client.target.attachment()).output = client.input;
         ((ProxyClient)client.target.attachment()).status = Status.TRANSLATING;
+        client.status = Status.TRANSLATING;
         client.target.interestOps(SelectionKey.OP_WRITE | SelectionKey.OP_READ);
         key.interestOps(0);
 
         System.out.println("Connected to host");
     }
 
-    private void write(SelectionKey key) throws IOException {
+    private void write(SelectionKey key){
         SocketChannel channel = (SocketChannel) key.channel();
         ProxyClient client = (ProxyClient) key.attachment();
-
-        if((channel.write(client.output) == -1)){
-            close(key);
-        }else if(client.output.remaining() == 0){
-            if(client.target == null){
-                close(key);
-            }else{
-                client.output.clear();
-
-                client.target.interestOps(client.target.interestOps() | SelectionKey.OP_READ);
-                key.interestOps(key.interestOps() ^ SelectionKey.OP_WRITE);
-                System.out.println("Retranslated traffic");
+        try {
+            if(key.isValid()) {
+                if ((channel.write(client.output) == -1)) {
+                    close(key);
+                } else if (client.output.remaining() == 0) {
+                    if (client.target == null) {
+                        close(key);
+                    } else {
+                        client.output.clear();
+                        client.target.interestOps(client.target.interestOps() | SelectionKey.OP_READ);
+                        key.interestOps(key.interestOps() ^ SelectionKey.OP_WRITE);
+                    }
+                }
             }
+        }catch (IOException e){
+            close(key);
         }
     }
 
@@ -302,10 +307,12 @@ public class ProxyThread extends Thread{
                 SelectionKey targetKey = ((ProxyClient) key.attachment()).target;
                 if (targetKey != null) {
                     ((ProxyClient) targetKey.attachment()).target = null;
-                    if ((targetKey.interestOps() & SelectionKey.OP_WRITE) == 0) {
-                        ((ProxyClient) targetKey.attachment()).output.flip();
+                    if(targetKey.isValid()) {
+                        if ((targetKey.interestOps() & SelectionKey.OP_WRITE) == 0) {
+                            ((ProxyClient) targetKey.attachment()).output.flip();
+                        }
+                        targetKey.interestOps(SelectionKey.OP_WRITE);
                     }
-                    targetKey.interestOps(SelectionKey.OP_WRITE);
                 }
             }
             System.out.println("Connection closed");
@@ -330,6 +337,9 @@ public class ProxyThread extends Thread{
     public void setStopped(){
         isRunning = false;
         try {
+            for(SelectionKey key : selector.keys()){
+                close(key);
+            }
             selector.close();
             serverChannel.close();
         } catch (IOException e) {
